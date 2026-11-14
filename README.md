@@ -28,7 +28,7 @@
 - Miuix（HyperOS 风格 Compose 组件库）实现，深浅色跟随系统，支持高级材质（玻璃 / 模糊）
 - 单应用精细开关 + 批量开启 / 关闭，自动向 LSPosed 申请作用域
 - 每张卡片带 Hook 状态圆点：绿 = 全部注入，红 = 部分失败，灰 = 尚未注入
-- 诊断页：运行状态、配置数量、按包名 / 级别筛选模块日志、一键导出
+- 诊断页：运行状态、配置数量、按包名 / 级别筛选模块日志、一键导出到系统下载目录或自定义目录
 - 20 种语言：简体中文、繁体中文（香港 / 台湾）、维吾尔语、藏语、英语（US / GB）、法语、德语、意大利语、土耳其语、荷兰语、俄语、西班牙语（ES / 拉美）、葡萄牙语（PT / BR）、阿拉伯语（RTL）、日语、韩语
 
 ## 截图
@@ -63,8 +63,8 @@
 ## 环境要求
 
 - Android 10 及以上（minSdk 29，targetSdk 37）
-- LSPosed（modern Xposed API，minApiVersion 101、targetApiVersion 102）
-- Root 只在「重启作用域应用」和诊断页读取日志时需要，模块本体不需要
+- LSPosed（modern Xposed API，`minApiVersion=101`、`targetApiVersion=102`）
+- Root 只在诊断页读取模块日志时需要，模块本体不需要
 
 ## 使用
 
@@ -74,6 +74,33 @@
 4. 强制停止并重新打开目标应用
 
 关闭类别后 hook 不会立刻卸载，需要重启目标应用；卡片和批量操作里都会提示。
+
+## 签名校验
+
+期望值从 `local.properties` 的 `EXPECTED_SIG_SHA256` 注入，**不写进源码**。留空 = 不校验，适合自己编译调试；填了 = 严格校验。
+
+校验分两层，因为模块的代码会跑在两类完全不同的进程里：
+
+**1. 模块自己的界面进程**（`App.onCreate` → `Security.verify`）
+签名不符直接结束进程。这一层拦住的是「装了个假界面」。
+
+**2. 目标应用进程**（`PermNullModule.install` → `ModuleIntegrity`）
+hook 代码被框架注入到别的应用进程里，不会经过 `App.onCreate`，上面那层覆盖不到这里。所以在真正安装 hook 之前，再核对一次承载模块代码的 APK 签名：
+
+- 通过 `getModuleApplicationInfo()` 拿到框架实际加载的那份 APK 路径
+- 用 `PackageManager.getPackageArchiveInfo` 取出签名证书，算 SHA-256 比对
+- 每个进程只算一次，结果缓存，后续不产生开销
+- **不匹配就跳过安装**，不装任何 hook，也绝不终止目标进程
+
+这层的意义是：重打包产物能装、能打开界面，但对任何目标应用都不生效，等于空壳。
+
+取值方式（keystore 需自行生成，仓库不含任何 keystore 与密码）：
+
+```bash
+keytool -list -v -keystore <你的.keystore> -alias <别名> | grep SHA256
+```
+
+对应 native 层只负责比对，自身不烧任何哈希。
 
 ## 官方包指纹
 
@@ -90,6 +117,10 @@ apksigner verify --print-certs 你的包.apk
 ```
 
 看输出里的 `Signer #1 certificate SHA-256 digest` 是否一致。不一致就是别人改过重签的版本，不要装。
+
+从源码自行编译的包签名必然不同，那是正常的——这类包在 `EXPECTED_SIG_SHA256` 留空时不做任何校验，只在你自己填了期望值时才按你的证书校验。
+
+这条公示挡不住有备而来的伪造者，但能让「假包冒充官方包」这件事当场暴露。
 
 ## 已知限制
 
@@ -108,15 +139,8 @@ apksigner verify --print-certs 你的包.apk
 
 [PolyForm Strict 1.0.0](LICENSE)
 
-允许：个人研究、实验、测试、学习、私人娱乐、业余爱好项目，以及慈善、教育、公共研究、公共安全与卫生、环保、政府机构的使用。
+本项目采用 PolyForm Strict 1.0.0 许可证：允许个人学习、研究、业余爱好等非商业用途，禁止分发、修改及基于本项目创建衍生作品。商业使用请通过 a285865818@outlook.com 联系获取授权。
 
-不允许：**分发这个软件**、**修改它或基于它做衍生作品**、以及**任何商业用途**。这不是 OSI 定义的开源许可证。
-
-需要修改或再分发请先联系作者取得书面授权。
-
-## 链接
-
-- 源码：https://github.com/a285865818-crypto/miui-blank-pass-ultra
-- 问题反馈：https://github.com/a285865818-crypto/miui-blank-pass-ultra/issues
+这不是 OSI 定义的开源许可证。
 
 作者：ETA & 地瓜
